@@ -203,6 +203,74 @@ function check(name, cond, extra) {
   check('volume bars drawn', await page.locator('.chart .bar-rect').count() >= 1);
   check('e1RM listed', (await page.locator('main').textContent()).includes('Barbell Bench Press'));
 
+  // --- history: every logged day survives and records compute ---
+  // Seed enough distinct lifts to push the PB list past its preview cap. Kept
+  // light (50 lb x 5) and back-dated so it cannot displace the records the
+  // later assertions check.
+  await page.evaluate(() => {
+    const old = Store.addDays(Store.today(), -40);
+    const lifts = ['Leg Press', 'Leg Curl', 'Calf Raise', 'Lat Pulldown', 'Dumbbell Row',
+      'Lateral Raise', 'Barbell Curl', 'Triceps Pushdown', 'Hip Thrust', 'Face Pull',
+      'Front Squat', 'Dumbbell Bench Press'];
+    Store.update(s => {
+      s.workouts.push({
+        id: Store.newId(), date: old, name: 'Seeded variety', notes: '',
+        exercises: lifts.map(name => ({ name, sets: [{ weight: '50', reps: '5' }] }))
+      });
+    });
+  });
+  await page.reload();
+  await page.waitForTimeout(300);
+  await page.locator('.tab[data-view=history]').click();
+  await page.waitForTimeout(300);
+  const histText = await page.locator('main').textContent();
+  check('history lists logged days', await page.locator('.list li').count() >= 20, histText.slice(0, 80));
+  check('history shows records', /Heaviest set|Biggest session/.test(histText));
+  check('history shows per-lift bests', histText.includes('Best per lift'));
+
+  // Long PB lists collapse behind an expander so the page stays scannable.
+  const expander = page.locator('button.btn.ghost.sm').filter({ hasText: 'Show all' });
+  check('long PB list is collapsed by default', await expander.count() === 1);
+  const before = await page.locator('.list li').count();
+  await expander.first().click();
+  await page.waitForTimeout(250);
+  const after = await page.locator('.list li').count();
+  check('PB list expands', after > before, before + ' -> ' + after);
+  await page.locator('button.btn.ghost.sm').filter({ hasText: 'Show fewer' }).first().click();
+  await page.waitForTimeout(250);
+  check('PB list collapses', await page.locator('.list li').count() === before);
+
+  const histData = await page.evaluate(() => ({
+    days: Records.dailyHistory(90).length,
+    streak: Records.loggingStreak(),
+    heaviest: Records.heaviestSet(),
+    session: Records.bestSession(),
+    lowest: Records.lowestWeight(),
+    all: Records.allTime()
+  }));
+  console.log('  history: ' + JSON.stringify(histData.streak) + ' days=' + histData.days);
+  check('every seeded day is retained', histData.days >= 28, String(histData.days));
+  check('streak counted', histData.streak.current >= 20, JSON.stringify(histData.streak));
+  check('heaviest set recorded with date',
+    histData.heaviest && histData.heaviest.weight === 185 && !!histData.heaviest.date,
+    JSON.stringify(histData.heaviest));
+  check('best session recorded', histData.session && histData.session.volume === 4440,
+    JSON.stringify(histData.session));
+  check('lowest weight recorded', histData.lowest && histData.lowest.lbs > 0,
+    JSON.stringify(histData.lowest));
+  check('all-time totals counted', histData.all.sessions >= 1 && histData.all.sets >= 4,
+    JSON.stringify(histData.all));
+
+  // Tapping a past day must open THAT day's log, not today's.
+  const targetDay = await page.evaluate(() => Records.dailyHistory(90)[3].date);
+  const expectedLabel = await page.evaluate(d => Store.prettyDate(d), targetDay);
+  await page.locator('.card').last().locator('.list li').nth(3).click();
+  await page.waitForTimeout(300);
+  const openedText = await page.locator('main').textContent();
+  check('tapping a past day opens that day', openedText.includes('Logged — ' + expectedLabel),
+    expectedLabel);
+  check('past day still holds its entries', openedText.includes('Seeded day'), openedText.slice(0, 120));
+
   // --- in-page confirm (native dialogs are suppressed in sandboxed frames) ---
   await page.locator('.tab[data-view=train]').click();
   await page.waitForTimeout(200);

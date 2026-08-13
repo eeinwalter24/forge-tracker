@@ -617,6 +617,130 @@
     ]);
   }
 
+  /* ---------- history & records ---------- */
+
+  /* Expand/collapse state for lists that would otherwise dominate the page.
+     Deliberately not persisted — it resets to the tidy view each visit. */
+  var uiState = { showAllPBs: false };
+  var PB_PREVIEW = 8;
+
+  function history(ctx) {
+    var pbs = Records.personalBests();
+    var streak = Records.loggingStreak();
+    var all = Records.allTime();
+    var days = Records.dailyHistory(90);
+    var heaviest = Records.heaviestSet();
+    var bestSession = Records.bestSession();
+    var bestWeek = Records.bestWeek();
+    var lowest = Records.lowestWeight();
+
+    function recordRow(icon, title, value, sub) {
+      return h('div.advice', [
+        h('div.advice-icon', icon),
+        h('div.advice-body', [
+          h('p.advice-title', title),
+          h('p.advice-text', value + (sub ? ' · ' + sub : ''))
+        ])
+      ]);
+    }
+
+    return frag([
+      h('div.card', [
+        h('h2.card-title', { style: 'margin-bottom:10px' }, 'Streak'),
+        h('div.grid-3', [
+          stat('Current', streak.current, streak.current === 1 ? 'day logged' : 'days logged'),
+          stat('Longest', streak.longest, 'day run'),
+          stat('Days logged', all.foodDays, 'all time')
+        ]),
+        streak.current === 0
+          ? h('div.hint', 'Nothing logged yet today. A day you skip is a hole in the data the coach uses — log it even when it is ugly.')
+          : h('div.hint', 'Every day you log is saved permanently on this device and listed below. Nothing rolls off.')
+      ]),
+
+      h('div.card', [
+        h('h2.card-title', { style: 'margin-bottom:6px' }, 'Records'),
+        heaviest || bestSession || lowest
+          ? frag([
+              heaviest ? recordRow('🏋️', 'Heaviest set',
+                heaviest.weight + ' lb × ' + heaviest.reps,
+                heaviest.exercise + ', ' + Store.prettyDate(heaviest.date)) : null,
+              bestSession ? recordRow('📦', 'Biggest session',
+                bestSession.volume.toLocaleString() + ' lb',
+                bestSession.name + ', ' + Store.prettyDate(bestSession.date)) : null,
+              bestWeek ? recordRow('📅', 'Biggest week',
+                bestWeek.volume.toLocaleString() + ' lb',
+                bestWeek.sessions + ' sessions, week ending ' + Store.prettyDate(bestWeek.end)) : null,
+              lowest ? recordRow('⚖️', 'Lowest bodyweight',
+                lowest.lbs + ' lb', Store.prettyDate(lowest.date)) : null
+            ])
+          : h('p.empty', 'Log a session or a weigh-in and your records start here.')
+      ]),
+
+      h('div.card', [
+        h('h2.card-title', { style: 'margin-bottom:10px' }, 'Best per lift'),
+        pbs.length
+          ? frag([
+              h('ul.list', (uiState.showAllPBs ? pbs : pbs.slice(0, PB_PREVIEW)).map(function (p) {
+                return h('li', [
+                  h('div.item-main', [
+                    h('div.item-name', p.exercise),
+                    h('div.item-sub', p.weight + ' lb × ' + p.reps + ' · ' + Store.prettyDate(p.date))
+                  ]),
+                  h('span.item-kcal', p.e1rm + ' lb')
+                ]);
+              })),
+              pbs.length > PB_PREVIEW ? h('button.btn.ghost.sm', {
+                style: 'width:100%;margin-top:10px',
+                onclick: function () { uiState.showAllPBs = !uiState.showAllPBs; ctx.rerender(); }
+              }, uiState.showAllPBs
+                ? 'Show fewer'
+                : 'Show all ' + pbs.length + ' lifts') : null
+            ])
+          : h('p.empty', 'No lifts logged yet.'),
+        pbs.length ? h('div.hint', 'Estimated 1RM from your best set on each lift, most recent first. Beating one of these in the logger earns a ★.') : null
+      ]),
+
+      h('div.card', [
+        h('h2.card-title', { style: 'margin-bottom:10px' }, 'All time'),
+        h('div.grid-4', [
+          stat('Sessions', all.sessions),
+          stat('Working sets', all.sets),
+          stat('Tonnage', Math.round(all.tonnage / 1000) + 'k', 'lb lifted'),
+          stat('Weigh-ins', all.weighIns)
+        ])
+      ]),
+
+      h('div.card', [
+        h('h2.card-title', { style: 'margin-bottom:4px' }, 'Every day you logged'),
+        h('p.card-sub', { style: 'margin-bottom:10px' }, 'Tap any day to open it and edit what you entered.'),
+        days.length
+          ? h('ul.list', days.map(function (d) {
+              var hitKcal = d.entries && d.kcal <= d.kcalTarget * 1.02;
+              var hitProtein = d.entries && d.protein >= d.proteinTarget * 0.95;
+              return h('li', {
+                style: 'cursor:pointer',
+                onclick: function () { ctx.setDate(d.date); ctx.go('food'); }
+              }, [
+                h('div.item-main', [
+                  h('div.item-name', Store.prettyDate(d.date)),
+                  h('div.item-sub', [
+                    d.entries ? d.kcal + ' kcal · ' + d.protein + 'g protein' : 'no food logged',
+                    d.weight ? ' · ' + d.weight + ' lb' : '',
+                    d.sessions.length ? ' · ' + d.sessions.map(function (s) { return s.name; }).join(', ') : ''
+                  ].join(''))
+                ]),
+                h('span.tiny', [
+                  hitKcal ? h('span.good', '●') : null,
+                  hitProtein ? h('span.good', '●') : null,
+                  d.sessions.length ? h('span.faint', ' 🏋️') : null
+                ])
+              ]);
+            }))
+          : h('p.empty', 'Nothing logged yet. Days appear here the moment you log anything.')
+      ])
+    ]);
+  }
+
   /* ---------- coach ---------- */
 
   function coach(ctx) {
@@ -707,6 +831,7 @@
 
   global.Views = {
     h: h, frag: frag, stat: stat, macroBar: macroBar, adviceRow: adviceRow,
-    dashboard: dashboard, food: food, train: train, progress: progress, coach: coach
+    dashboard: dashboard, food: food, train: train, progress: progress,
+    history: history, coach: coach
   };
 })(window);
